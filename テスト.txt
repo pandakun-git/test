@@ -1,0 +1,40 @@
+import slixmpp
+import threading
+
+JID = "あなたのID"
+PASSWORD = "パスワード"
+
+class PresenceBot(slixmpp.ClientXMPP):
+
+    def __init__(self, jid, password):
+        super().__init__(jid, password)
+
+        self.add_event_handler("session_start", self.start)
+
+    def start(self, event):
+        print("ログイン成功")
+        self.send_presence()
+        self.get_roster()
+
+        print("一覧取得")
+
+        # ここが重要
+        for jid in self.client_roster.keys():
+            connections = self.client_roster.presence(jid)
+
+            if not connections:
+                print(f"{jid} → offline")
+            else:
+                for res, pres in connections.items():
+                    status = pres['show']
+                    if status is None:
+                        status = "online"
+
+                    print(f"{jid} → {status}")
+
+        threading.Timer(30, self.disconnect).start()
+
+xmpp = PresenceBot(JID, PASSWORD)
+
+xmpp.connect(("m13410007001.dfimod.go.jp", 5222))
+xmpp.process(forever=True)
