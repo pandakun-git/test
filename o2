@@ -10,30 +10,34 @@ from openpyxl.styles import PatternFill
 # =========================
 # 設定
 # =========================
-GRID_COUNT = 10                  # 10桁固定
-THRESHOLD = 0.45                # これ未満は要確認寄り
+GRID_COUNT = 10
+THRESHOLD = 0.45
+
 TEMPLATE_DIR = "templates"
 POPPLER_PATH = "./poppler/Library/bin"
 EXCEL_FILE = "result.xlsx"
 
-# 読みたい行番号（1〜4）
+# 読みたい行番号（1〜5）
 TARGET_ROW = 1
 
-# 金額欄の左右座標
+# 1文字目の左端位置
 AMOUNT_COLUMN_LEFT = 1120
-AMOUNT_COLUMN_RIGHT = 1410
 
-# 各行の上下座標
+# 行の上下位置
 ROW_AREAS = {
     1: (315, 365),
     2: (365, 415),
     3: (415, 465),
     4: (465, 515),
+    5: (515, 565),
 }
 
-# 枠線を避けるための余白
-CELL_MARGIN_X = 6
-CELL_MARGIN_Y = 6
+# 1マスの固定幅
+CELL_WIDTH = 30
+
+# セルの余白
+CELL_MARGIN_X = 0
+CELL_MARGIN_Y = 0
 
 SAVE_DEBUG_IMAGES = True
 
@@ -52,7 +56,7 @@ def select_pdf():
 
 
 # =========================
-# テンプレ読み込み（0〜9のみ）
+# テンプレ読み込み
 # =========================
 def load_templates():
     templates = {}
@@ -84,36 +88,34 @@ def pdf_to_image(pdf_path):
 # =========================
 def preprocess(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # 二値化
     _, th = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
-
     return th
 
 
 # =========================
-# デバッグ画像保存
+# デバッグ画像
 # =========================
 def save_debug_box_on_original(img):
     if TARGET_ROW not in ROW_AREAS:
         raise ValueError(f"TARGET_ROW={TARGET_ROW} が ROW_AREAS にありません")
 
     top, bottom = ROW_AREAS[TARGET_ROW]
-    left = AMOUNT_COLUMN_LEFT
-    right = AMOUNT_COLUMN_RIGHT
-
     debug_img = img.copy()
 
-    # 赤枠
-    cv2.rectangle(debug_img, (left, top), (right, bottom), (0, 0, 255), 2)
+    for i in range(GRID_COUNT):
+        x1 = AMOUNT_COLUMN_LEFT + i * CELL_WIDTH
+        x2 = x1 + CELL_WIDTH
 
-    # 青い分割線
-    total_w = right - left
-    cell_w = total_w // GRID_COUNT
+        # セル全体
+        cv2.rectangle(debug_img, (x1, top), (x2, bottom), (0, 0, 255), 1)
 
-    for i in range(1, GRID_COUNT):
-        x = left + i * cell_w
-        cv2.line(debug_img, (x, top), (x, bottom), (255, 0, 0), 1)
+        # OCRに使う内側
+        ix1 = x1 + CELL_MARGIN_X
+        ix2 = x2 - CELL_MARGIN_X
+        iy1 = top + CELL_MARGIN_Y
+        iy2 = bottom - CELL_MARGIN_Y
+
+        cv2.rectangle(debug_img, (ix1, iy1), (ix2, iy2), (255, 0, 0), 1)
 
     cv2.imwrite("debug_box.png", debug_img)
 
@@ -121,38 +123,30 @@ def save_debug_box_on_original(img):
 def save_debug_area(img):
     top, bottom = ROW_AREAS[TARGET_ROW]
     left = AMOUNT_COLUMN_LEFT
-    right = AMOUNT_COLUMN_RIGHT
+    right = AMOUNT_COLUMN_LEFT + GRID_COUNT * CELL_WIDTH
 
     area = img[top:bottom, left:right]
     cv2.imwrite("debug_area.png", area)
 
 
 # =========================
-# 金額欄を10分割
+# 1マスずつ固定幅で分割
 # =========================
 def split_grid(img):
     if TARGET_ROW not in ROW_AREAS:
         raise ValueError(f"TARGET_ROW={TARGET_ROW} が ROW_AREAS にありません")
 
     top, bottom = ROW_AREAS[TARGET_ROW]
-    left = AMOUNT_COLUMN_LEFT
-    right = AMOUNT_COLUMN_RIGHT
-
-    area = img[top:bottom, left:right]
-
-    if area.size == 0:
-        raise ValueError("切り出し範囲が空です。座標を見直してください。")
-
-    h, w = area.shape
-    cell_w = w // GRID_COUNT
-
     cells = []
 
     for i in range(GRID_COUNT):
-        x1 = i * cell_w
-        x2 = (i + 1) * cell_w if i < GRID_COUNT - 1 else w
+        x1 = AMOUNT_COLUMN_LEFT + i * CELL_WIDTH
+        x2 = x1 + CELL_WIDTH
 
-        cell = area[:, x1:x2]
+        cell = img[top:bottom, x1:x2]
+
+        if cell.size == 0:
+            raise ValueError("切り出し範囲が空です。AMOUNT_COLUMN_LEFT または CELL_WIDTH を見直してください。")
 
         cy1 = CELL_MARGIN_Y
         cy2 = cell.shape[0] - CELL_MARGIN_Y
@@ -172,7 +166,7 @@ def split_grid(img):
 
 
 # =========================
-# 1文字認識（数字のみ）
+# 1文字認識
 # =========================
 def match_digit(cell, templates):
     cell_resized = cv2.resize(cell, (28, 28))
@@ -217,7 +211,6 @@ def recognize(pdf_path, templates):
 
         warn = "⚠️" if score < THRESHOLD else ""
 
-        # 上位2候補
         sorted_scores = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
         top2 = ", ".join([f"{k}:{v:.3f}" for k, v in sorted_scores[:2]])
 
@@ -228,7 +221,7 @@ def recognize(pdf_path, templates):
 
 
 # =========================
-# 数字列 → カンマ付き金額
+# 金額整形
 # =========================
 def format_currency(text):
     nums = re.sub(r"[^0-9]", "", text)
