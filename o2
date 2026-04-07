@@ -10,40 +10,36 @@ from openpyxl.styles import PatternFill
 # =========================
 # 設定
 # =========================
-GRID_COUNT = 10
-THRESHOLD = 0.6
-
+GRID_COUNT = 10                  # 10桁固定
+THRESHOLD = 0.45                # これ未満は要確認寄り
 TEMPLATE_DIR = "templates"
 POPPLER_PATH = "./poppler/Library/bin"
 EXCEL_FILE = "result.xlsx"
 
 # 読みたい行番号（1〜4）
-TARGET_ROW = 3
+TARGET_ROW = 1
 
-# 金額列の左右座標
-# debug_box.png を見ながらここを調整
-AMOUNT_COLUMN_LEFT = 485
-AMOUNT_COLUMN_RIGHT = 648
+# 金額欄の左右座標
+AMOUNT_COLUMN_LEFT = 1120
+AMOUNT_COLUMN_RIGHT = 1410
 
 # 各行の上下座標
-# debug_box.png を見ながらここを調整
 ROW_AREAS = {
-    1: (95, 125),
-    2: (125, 155),
-    3: (155, 185),
-    4: (185, 215),
+    1: (315, 365),
+    2: (365, 415),
+    3: (415, 465),
+    4: (465, 515),
 }
 
-# 各セルの内側だけ使うための余白
-CELL_MARGIN_X = 2
-CELL_MARGIN_Y = 2
+# 枠線を避けるための余白
+CELL_MARGIN_X = 6
+CELL_MARGIN_Y = 6
 
-# デバッグ画像を保存するか
 SAVE_DEBUG_IMAGES = True
 
 
 # =========================
-# ファイル選択
+# PDF選択
 # =========================
 def select_pdf():
     root = Tk()
@@ -56,16 +52,15 @@ def select_pdf():
 
 
 # =========================
-# テンプレ読み込み
+# テンプレ読み込み（0〜9のみ）
 # =========================
 def load_templates():
     templates = {}
 
-    for char in "0123456789,":
-        filename = "comma.png" if char == "," else f"{char}.png"
-        path = os.path.join(TEMPLATE_DIR, filename)
-
+    for char in "0123456789":
+        path = os.path.join(TEMPLATE_DIR, f"{char}.png")
         img = cv2.imread(path, 0)
+
         if img is None:
             raise FileNotFoundError(f"テンプレ画像が読めません: {path}")
 
@@ -90,7 +85,7 @@ def pdf_to_image(pdf_path):
 def preprocess(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 白黒反転（二値化）
+    # 二値化
     _, th = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
 
     return th
@@ -109,10 +104,10 @@ def save_debug_box_on_original(img):
 
     debug_img = img.copy()
 
-    # 対象セル全体の赤枠
+    # 赤枠
     cv2.rectangle(debug_img, (left, top), (right, bottom), (0, 0, 255), 2)
 
-    # 10分割の青線
+    # 青い分割線
     total_w = right - left
     cell_w = total_w // GRID_COUNT
 
@@ -133,7 +128,7 @@ def save_debug_area(img):
 
 
 # =========================
-# 金額セルを10分割
+# 金額欄を10分割
 # =========================
 def split_grid(img):
     if TARGET_ROW not in ROW_AREAS:
@@ -159,7 +154,6 @@ def split_grid(img):
 
         cell = area[:, x1:x2]
 
-        # 枠線を避けるため内側を少し使う
         cy1 = CELL_MARGIN_Y
         cy2 = cell.shape[0] - CELL_MARGIN_Y
         cx1 = CELL_MARGIN_X
@@ -178,13 +172,12 @@ def split_grid(img):
 
 
 # =========================
-# 1文字認識
+# 1文字認識（数字のみ）
 # =========================
 def match_digit(cell, templates):
-    # テンプレサイズに合わせる
     cell_resized = cv2.resize(cell, (28, 28))
 
-    best_char = None
+    best_char = ""
     best_score = -1.0
     score_map = {}
 
@@ -221,9 +214,10 @@ def recognize(pdf_path, templates):
 
     for i, cell in enumerate(cells):
         char, score, score_map = match_digit(cell, templates)
+
         warn = "⚠️" if score < THRESHOLD else ""
 
-        # 上位候補を見たいとき用
+        # 上位2候補
         sorted_scores = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
         top2 = ", ".join([f"{k}:{v:.3f}" for k, v in sorted_scores[:2]])
 
@@ -234,7 +228,7 @@ def recognize(pdf_path, templates):
 
 
 # =========================
-# 金額整形
+# 数字列 → カンマ付き金額
 # =========================
 def format_currency(text):
     nums = re.sub(r"[^0-9]", "", text)
