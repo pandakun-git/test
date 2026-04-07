@@ -1,0 +1,252 @@
+import os
+import re
+import cv2
+import numpy as np
+from tkinter import Tk, filedialog
+from pdf2image import convert_from_path
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill
+
+# ===== 設定 =====
+GRID_COUNT = 10
+THRESHOLD = 0.6
+TEMPLATE_DIR = "templates"
+POPPLER_PATH = "./poppler/Library/bin"
+EXCEL_FILE = "result.xlsx"
+
+# ===== 数字欄の位置（ここを調整）=====
+# PDFを画像化したあと、この範囲を10分割する
+# まずは仮の値。debug_area.png を見ながら調整していく
+GRID_TOP = 500
+GRID_BOTTOM = 700
+GRID_LEFT = 300
+GRID_RIGHT = 1800
+
+# 各マスの枠線を少し避けるための余白
+CELL_MARGIN_X = 10
+CELL_MARGIN_Y = 10
+
+# デバッグ画像を保存するか
+SAVE_DEBUG_IMAGES = True
+
+
+# ===== ファイル選択 =====
+def select_pdf():
+    root = Tk()
+    root.withdraw()
+    file_path = filedialog.askopenfilename(
+        title="PDFファイルを選択",
+        filetypes=[("PDFファイル", "*.pdf")]
+    )
+    return file_path
+
+
+# ===== テンプレ読み込み =====
+def load_templates():
+    templates = {}
+    for char in "0123456789,":
+        filename = "comma.png" if char == "," else f"{char}.png"
+        path = os.path.join(TEMPLATE_DIR, filename)
+
+        img = cv2.imread(path, 0)
+        if img is None:
+            raise FileNotFoundError(f"テンプレ画像が読めません: {path}")
+
+        templates[char] = cv2.resize(img, (28, 28))
+
+    return templates
+
+
+# ===== PDF → 画像 =====
+def pdf_to_image(pdf_path):
+    images = convert_from_path(pdf_path, dpi=300, poppler_path=POPPLER_PATH)
+    if not images:
+        raise ValueError("PDFの画像化に失敗しました")
+    return np.array(images[0])
+
+
+# ===== 前処理 =====
+def preprocess(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, th = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    return th
+
+
+# ===== デバッグ用：範囲保存 =====
+def save_debug_area(img):
+    area = img[GRID_TOP:GRID_BOTTOM, GRID_LEFT:GRID_RIGHT]
+    cv2.imwrite("debug_area.png", area)
+
+
+# ===== デバッグ用：元画像に範囲枠を描いて保存 =====
+def save_debug_box_on_original(img):
+    debug_img = img.copy()
+    cv2.rectangle(
+        debug_img,
+        (GRID_LEFT, GRID_TOP),
+        (GRID_RIGHT, GRID_BOTTOM),
+        (0, 0, 255),
+        3
+    )
+    cv2.imwrite("debug_box.png", debug_img)
+
+
+# ===== グリッド分割 =====
+def split_grid(img):
+    # 数字欄全体を切り出し
+    area = img[GRID_TOP:GRID_BOTTOM, GRID_LEFT:GRID_RIGHT]
+
+    if area.size == 0:
+        raise ValueError("数字欄の切り出し範囲が不正です。GRID_TOP/BOTTOM/LEFT/RIGHTを見直してください。")
+
+    h, w = area.shape
+    cell_w = w // GRID_COUNT
+
+    cells = []
+
+    for i in range(GRID_COUNT):
+        x1 = i * cell_w
+        x2 = (i + 1) * cell_w if i < GRID_COUNT - 1 else w
+
+        cell = area[:, x1:x2]
+
+        # 枠線を少し避ける
+        cy1 = CELL_MARGIN_Y
+        cy2 = cell.shape[0] - CELL_MARGIN_Y
+        cx1 = CELL_MARGIN_X
+        cx2 = cell.shape[1] - CELL_MARGIN_X
+
+        # 念のため範囲保護
+        if cy2 <= cy1 or cx2 <= cx1:
+            raise ValueError("CELL_MARGIN_X または CELL_MARGIN_Y が大きすぎます。")
+
+        inner = cell[cy1:cy2, cx1:cx2]
+        cells.append(inner)
+
+        if SAVE_DEBUG_IMAGES:
+            cv2.imwrite(f"cell_{i}.png", inner)
+
+    return cells
+
+
+# ===== 1文字認識 =====
+def match_digit(cell, templates):
+    cell_resized = cv2.resize(cell, (28, 28))
+
+    best_char = None
+    best_score = -1.0
+
+    for char, tmpl in templates.items():
+        result = cv2.matchTemplate(cell_resized, tmpl, cv2.TM_CCOEFF_NORMED)
+        score = float(result[0][0])
+
+        if score > best_score:
+            best_score = score
+            best_char = char
+
+    return best_char, best_score
+
+
+# ===== OCR =====
+def recognize(pdf_path, templates):
+    original_img = pdf_to_image(pdf_path)
+
+    if SAVE_DEBUG_IMAGES:
+        save_debug_box_on_original(original_img)
+
+    th = preprocess(original_img)
+
+    if SAVE_DEBUG_IMAGES:
+        save_debug_area(th)
+
+    cells = split_grid(th)
+
+    result = ""
+    logs = []
+
+    for i, cell in enumerate(cells):
+        char, score = match_digit(cell, templates)
+        warn = "⚠️" if score < THRESHOLD else ""
+
+        result += char
+        logs.append(f"[{i}] {char} (score={score:.3f}) {warn}")
+
+    return result, logs
+
+
+# ===== 金額整形 =====
+def format_currency(text):
+    nums = re.sub(r"[^0-9]", "", text)
+    if not nums:
+        return ""
+    return "{:,}".format(int(nums))
+
+
+# ===== Excel保存 =====
+def save_excel(file_path, raw, formatted, logs):
+    status = "OK"
+    for log in logs:
+        if "⚠️" in log:
+            status = "要確認"
+            break
+
+    filename = os.path.basename(file_path)
+
+    if os.path.exists(EXCEL_FILE):
+        wb = load_workbook(EXCEL_FILE)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "OCR結果"
+        ws.append(["ファイル名", "OCR結果", "金額整形", "判定", "詳細ログ"])
+
+        ws.column_dimensions["A"].width = 30
+        ws.column_dimensions["B"].width = 20
+        ws.column_dimensions["C"].width = 20
+        ws.column_dimensions["D"].width = 12
+        ws.column_dimensions["E"].width = 100
+
+    ws.append([filename, raw, formatted, status, " | ".join(logs)])
+
+    if status == "要確認":
+        red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+        row = ws.max_row
+        for col in range(1, 6):
+            ws.cell(row=row, column=col).fill = red_fill
+
+    wb.save(EXCEL_FILE)
+
+
+# ===== メイン =====
+if __name__ == "__main__":
+    try:
+        print("PDFを選択してください")
+        pdf_path = select_pdf()
+
+        if not pdf_path:
+            print("キャンセルされました")
+            raise SystemExit
+
+        templates = load_templates()
+
+        result, logs = recognize(pdf_path, templates)
+        formatted = format_currency(result)
+
+        print("\n=== OCR結果 ===")
+        print("生データ :", result)
+        print("金額整形 :", formatted)
+
+        print("\n=== 認識ログ ===")
+        for log in logs:
+            print(log)
+
+        save_excel(pdf_path, result, formatted, logs)
+        print("\nExcelに保存しました")
+
+        if SAVE_DEBUG_IMAGES:
+            print("debug_box.png / debug_area.png / cell_0.png ～ cell_9.png を確認してください")
+
+    except Exception as e:
+        print("\nエラーが発生しました:")
+        print(e)
