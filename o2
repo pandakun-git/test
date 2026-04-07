@@ -20,8 +20,9 @@ EXCEL_FILE = "result.xlsx"
 # 読みたい行番号（1〜5）
 TARGET_ROW = 1
 
-# 1文字目の左端位置
-AMOUNT_COLUMN_LEFT = 1120
+# 位置合わせ済み
+AMOUNT_COLUMN_LEFT = 1054
+CELL_WIDTH = 67
 
 # 行の上下位置
 ROW_AREAS = {
@@ -32,12 +33,9 @@ ROW_AREAS = {
     5: (515, 565),
 }
 
-# 1マスの固定幅
-CELL_WIDTH = 30
-
-# セルの余白
-CELL_MARGIN_X = 0
-CELL_MARGIN_Y = 0
+# 認識範囲
+CELL_MARGIN_X = 5
+CELL_MARGIN_Y = 2
 
 SAVE_DEBUG_IMAGES = True
 
@@ -56,6 +54,60 @@ def select_pdf():
 
 
 # =========================
+# 前処理ユーティリティ
+# =========================
+def normalize_digit(cell):
+    contours, _ = cv2.findContours(cell, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        return np.zeros((28, 28), dtype=np.uint8)
+
+    largest = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest)
+
+    if w * h < 10:
+        return np.zeros((28, 28), dtype=np.uint8)
+
+    digit = cell[y:y+h, x:x+w]
+
+    canvas = np.zeros((28, 28), dtype=np.uint8)
+
+    scale = min(20 / w, 20 / h)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+
+    resized = cv2.resize(digit, (new_w, new_h))
+
+    x_offset = (28 - new_w) // 2
+    y_offset = (28 - new_h) // 2
+
+    canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized
+    return canvas
+
+
+def remove_grid_lines(binary_img):
+    img = binary_img.copy()
+
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+    vertical_lines = cv2.morphologyEx(img, cv2.MORPH_OPEN, vertical_kernel)
+
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+    horizontal_lines = cv2.morphologyEx(img, cv2.MORPH_OPEN, horizontal_kernel)
+
+    lines = cv2.bitwise_or(vertical_lines, horizontal_lines)
+    cleaned = cv2.subtract(img, lines)
+
+    return cleaned
+
+
+def is_blank_cell(cell):
+    white_pixels = cv2.countNonZero(cell)
+    area = cell.shape[0] * cell.shape[1]
+    ratio = white_pixels / area
+    return ratio < 0.03
+
+
+# =========================
 # テンプレ読み込み
 # =========================
 def load_templates():
@@ -68,7 +120,13 @@ def load_templates():
         if img is None:
             raise FileNotFoundError(f"テンプレ画像が読めません: {path}")
 
-        templates[char] = cv2.resize(img, (28, 28))
+        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        img = normalize_digit(img)
+
+        templates[char] = img
+
+        if SAVE_DEBUG_IMAGES:
+            cv2.imwrite(f"template_norm_{char}.png", img)
 
     return templates
 
@@ -88,7 +146,7 @@ def pdf_to_image(pdf_path):
 # =========================
 def preprocess(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, th = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     return th
 
 
@@ -103,8 +161,8 @@ def save_debug_box_on_original(img):
     debug_img = img.copy()
 
     for i in range(GRID_COUNT):
-        x1 = AMOUNT_COLUMN_LEFT + i * CELL_WIDTH
-        x2 = x1 + CELL_WIDTH
+        x1 = int(AMOUNT_COLUMN_LEFT + i * CELL_WIDTH)
+        x2 = int(AMOUNT_COLUMN_LEFT + (i + 1) * CELL_WIDTH)
 
         # セル全体
         cv2.rectangle(debug_img, (x1, top), (x2, bottom), (0, 0, 255), 1)
@@ -122,8 +180,8 @@ def save_debug_box_on_original(img):
 
 def save_debug_area(img):
     top, bottom = ROW_AREAS[TARGET_ROW]
-    left = AMOUNT_COLUMN_LEFT
-    right = AMOUNT_COLUMN_LEFT + GRID_COUNT * CELL_WIDTH
+    left = int(AMOUNT_COLUMN_LEFT)
+    right = int(AMOUNT_COLUMN_LEFT + GRID_COUNT * CELL_WIDTH)
 
     area = img[top:bottom, left:right]
     cv2.imwrite("debug_area.png", area)
@@ -140,8 +198,8 @@ def split_grid(img):
     cells = []
 
     for i in range(GRID_COUNT):
-        x1 = AMOUNT_COLUMN_LEFT + i * CELL_WIDTH
-        x2 = x1 + CELL_WIDTH
+        x1 = int(AMOUNT_COLUMN_LEFT + i * CELL_WIDTH)
+        x2 = int(AMOUNT_COLUMN_LEFT + (i + 1) * CELL_WIDTH)
 
         cell = img[top:bottom, x1:x2]
 
@@ -157,10 +215,13 @@ def split_grid(img):
             raise ValueError("CELL_MARGIN_X または CELL_MARGIN_Y が大きすぎます。")
 
         inner = cell[cy1:cy2, cx1:cx2]
+        inner = normalize_digit(inner)
         cells.append(inner)
 
         if SAVE_DEBUG_IMAGES:
-            cv2.imwrite(f"cell_{i}.png", inner)
+            cv2.imwrite(f"cell_{i}.png", cell)
+            cv2.imwrite(f"cell_inner_{i}.png", inner)
+            cv2.imwrite(f"cell_norm_{i}.png", inner)
 
     return cells
 
@@ -169,14 +230,12 @@ def split_grid(img):
 # 1文字認識
 # =========================
 def match_digit(cell, templates):
-    cell_resized = cv2.resize(cell, (28, 28))
-
     best_char = ""
     best_score = -1.0
     score_map = {}
 
     for char, tmpl in templates.items():
-        result = cv2.matchTemplate(cell_resized, tmpl, cv2.TM_CCOEFF_NORMED)
+        result = cv2.matchTemplate(cell, tmpl, cv2.TM_CCOEFF_NORMED)
         score = float(result[0][0])
         score_map[char] = score
 
@@ -185,6 +244,31 @@ def match_digit(cell, templates):
             best_char = char
 
     return best_char, best_score, score_map
+
+
+# =========================
+# 1 / 7 補正
+# =========================
+def refine_one_seven(cell, predicted_char):
+    h, w = cell.shape
+
+    top_area = cell[0:max(1, int(h * 0.2)), :]
+    top_ratio = cv2.countNonZero(top_area) / top_area.size
+
+    center_x1 = int(w * 0.4)
+    center_x2 = int(w * 0.6)
+    center_area = cell[:, center_x1:center_x2]
+    center_ratio = cv2.countNonZero(center_area) / center_area.size
+
+    if predicted_char == "7":
+        if top_ratio < 0.08 and center_ratio > 0.10:
+            return "1"
+
+    if predicted_char == "1":
+        if top_ratio > 0.18:
+            return "7"
+
+    return predicted_char
 
 
 # =========================
@@ -197,6 +281,7 @@ def recognize(pdf_path, templates):
         save_debug_box_on_original(original_img)
 
     th = preprocess(original_img)
+    th = remove_grid_lines(th)
 
     if SAVE_DEBUG_IMAGES:
         save_debug_area(th)
@@ -207,7 +292,14 @@ def recognize(pdf_path, templates):
     logs = []
 
     for i, cell in enumerate(cells):
+        if is_blank_cell(cell):
+            logs.append(f"[{i}] 空欄")
+            continue
+
         char, score, score_map = match_digit(cell, templates)
+
+        if char in ("1", "7"):
+            char = refine_one_seven(cell, char)
 
         warn = "⚠️" if score < THRESHOLD else ""
 
@@ -306,7 +398,7 @@ if __name__ == "__main__":
         print("\nExcelに保存しました")
 
         if SAVE_DEBUG_IMAGES:
-            print("debug_box.png / debug_area.png / cell_0.png ～ cell_9.png を確認してください")
+            print("debug_box.png / debug_area.png / cell_0.png / cell_inner_0.png / cell_norm_0.png などを確認してください")
 
     except Exception as e:
         print("\nエラーが発生しました:")
