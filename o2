@@ -1,0 +1,326 @@
+import os
+import re
+import cv2
+import numpy as np
+from tkinter import Tk, filedialog
+from pdf2image import convert_from_path
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill
+
+# =========================
+# 設定
+# =========================
+GRID_COUNT = 10
+THRESHOLD = 0.6
+
+TEMPLATE_DIR = "templates"
+POPPLER_PATH = "./poppler/Library/bin"
+EXCEL_FILE = "result.xlsx"
+
+# 読みたい行番号（1〜4）
+TARGET_ROW = 3
+
+# 金額列の左右座標
+# debug_box.png を見ながらここを調整
+AMOUNT_COLUMN_LEFT = 485
+AMOUNT_COLUMN_RIGHT = 648
+
+# 各行の上下座標
+# debug_box.png を見ながらここを調整
+ROW_AREAS = {
+    1: (95, 125),
+    2: (125, 155),
+    3: (155, 185),
+    4: (185, 215),
+}
+
+# 各セルの内側だけ使うための余白
+CELL_MARGIN_X = 2
+CELL_MARGIN_Y = 2
+
+# デバッグ画像を保存するか
+SAVE_DEBUG_IMAGES = True
+
+
+# =========================
+# ファイル選択
+# =========================
+def select_pdf():
+    root = Tk()
+    root.withdraw()
+    file_path = filedialog.askopenfilename(
+        title="PDFファイルを選択",
+        filetypes=[("PDFファイル", "*.pdf")]
+    )
+    return file_path
+
+
+# =========================
+# テンプレ読み込み
+# =========================
+def load_templates():
+    templates = {}
+
+    for char in "0123456789,":
+        filename = "comma.png" if char == "," else f"{char}.png"
+        path = os.path.join(TEMPLATE_DIR, filename)
+
+        img = cv2.imread(path, 0)
+        if img is None:
+            raise FileNotFoundError(f"テンプレ画像が読めません: {path}")
+
+        templates[char] = cv2.resize(img, (28, 28))
+
+    return templates
+
+
+# =========================
+# PDF → 画像
+# =========================
+def pdf_to_image(pdf_path):
+    images = convert_from_path(pdf_path, dpi=300, poppler_path=POPPLER_PATH)
+    if not images:
+        raise ValueError("PDFの画像化に失敗しました")
+    return np.array(images[0])
+
+
+# =========================
+# 前処理
+# =========================
+def preprocess(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # 白黒反転（二値化）
+    _, th = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+
+    return th
+
+
+# =========================
+# デバッグ画像保存
+# =========================
+def save_debug_box_on_original(img):
+    if TARGET_ROW not in ROW_AREAS:
+        raise ValueError(f"TARGET_ROW={TARGET_ROW} が ROW_AREAS にありません")
+
+    top, bottom = ROW_AREAS[TARGET_ROW]
+    left = AMOUNT_COLUMN_LEFT
+    right = AMOUNT_COLUMN_RIGHT
+
+    debug_img = img.copy()
+
+    # 対象セル全体の赤枠
+    cv2.rectangle(debug_img, (left, top), (right, bottom), (0, 0, 255), 2)
+
+    # 10分割の青線
+    total_w = right - left
+    cell_w = total_w // GRID_COUNT
+
+    for i in range(1, GRID_COUNT):
+        x = left + i * cell_w
+        cv2.line(debug_img, (x, top), (x, bottom), (255, 0, 0), 1)
+
+    cv2.imwrite("debug_box.png", debug_img)
+
+
+def save_debug_area(img):
+    top, bottom = ROW_AREAS[TARGET_ROW]
+    left = AMOUNT_COLUMN_LEFT
+    right = AMOUNT_COLUMN_RIGHT
+
+    area = img[top:bottom, left:right]
+    cv2.imwrite("debug_area.png", area)
+
+
+# =========================
+# 金額セルを10分割
+# =========================
+def split_grid(img):
+    if TARGET_ROW not in ROW_AREAS:
+        raise ValueError(f"TARGET_ROW={TARGET_ROW} が ROW_AREAS にありません")
+
+    top, bottom = ROW_AREAS[TARGET_ROW]
+    left = AMOUNT_COLUMN_LEFT
+    right = AMOUNT_COLUMN_RIGHT
+
+    area = img[top:bottom, left:right]
+
+    if area.size == 0:
+        raise ValueError("切り出し範囲が空です。座標を見直してください。")
+
+    h, w = area.shape
+    cell_w = w // GRID_COUNT
+
+    cells = []
+
+    for i in range(GRID_COUNT):
+        x1 = i * cell_w
+        x2 = (i + 1) * cell_w if i < GRID_COUNT - 1 else w
+
+        cell = area[:, x1:x2]
+
+        # 枠線を避けるため内側を少し使う
+        cy1 = CELL_MARGIN_Y
+        cy2 = cell.shape[0] - CELL_MARGIN_Y
+        cx1 = CELL_MARGIN_X
+        cx2 = cell.shape[1] - CELL_MARGIN_X
+
+        if cy2 <= cy1 or cx2 <= cx1:
+            raise ValueError("CELL_MARGIN_X または CELL_MARGIN_Y が大きすぎます。")
+
+        inner = cell[cy1:cy2, cx1:cx2]
+        cells.append(inner)
+
+        if SAVE_DEBUG_IMAGES:
+            cv2.imwrite(f"cell_{i}.png", inner)
+
+    return cells
+
+
+# =========================
+# 1文字認識
+# =========================
+def match_digit(cell, templates):
+    # テンプレサイズに合わせる
+    cell_resized = cv2.resize(cell, (28, 28))
+
+    best_char = None
+    best_score = -1.0
+    score_map = {}
+
+    for char, tmpl in templates.items():
+        result = cv2.matchTemplate(cell_resized, tmpl, cv2.TM_CCOEFF_NORMED)
+        score = float(result[0][0])
+        score_map[char] = score
+
+        if score > best_score:
+            best_score = score
+            best_char = char
+
+    return best_char, best_score, score_map
+
+
+# =========================
+# OCR
+# =========================
+def recognize(pdf_path, templates):
+    original_img = pdf_to_image(pdf_path)
+
+    if SAVE_DEBUG_IMAGES:
+        save_debug_box_on_original(original_img)
+
+    th = preprocess(original_img)
+
+    if SAVE_DEBUG_IMAGES:
+        save_debug_area(th)
+
+    cells = split_grid(th)
+
+    result = ""
+    logs = []
+
+    for i, cell in enumerate(cells):
+        char, score, score_map = match_digit(cell, templates)
+        warn = "⚠️" if score < THRESHOLD else ""
+
+        # 上位候補を見たいとき用
+        sorted_scores = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
+        top2 = ", ".join([f"{k}:{v:.3f}" for k, v in sorted_scores[:2]])
+
+        result += char
+        logs.append(f"[{i}] {char} (score={score:.3f}) {warn} top2={top2}")
+
+    return result, logs
+
+
+# =========================
+# 金額整形
+# =========================
+def format_currency(text):
+    nums = re.sub(r"[^0-9]", "", text)
+    if not nums:
+        return ""
+    return "{:,}".format(int(nums))
+
+
+# =========================
+# Excel保存
+# =========================
+def save_excel(file_path, raw, formatted, logs):
+    status = "OK"
+    for log in logs:
+        if "⚠️" in log:
+            status = "要確認"
+            break
+
+    filename = os.path.basename(file_path)
+
+    if os.path.exists(EXCEL_FILE):
+        wb = load_workbook(EXCEL_FILE)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "OCR結果"
+        ws.append(["ファイル名", "対象行", "OCR結果", "金額整形", "判定", "詳細ログ"])
+
+        ws.column_dimensions["A"].width = 30
+        ws.column_dimensions["B"].width = 10
+        ws.column_dimensions["C"].width = 20
+        ws.column_dimensions["D"].width = 20
+        ws.column_dimensions["E"].width = 12
+        ws.column_dimensions["F"].width = 120
+
+    ws.append([
+        filename,
+        TARGET_ROW,
+        raw,
+        formatted,
+        status,
+        " | ".join(logs)
+    ])
+
+    if status == "要確認":
+        red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+        row = ws.max_row
+        for col in range(1, 7):
+            ws.cell(row=row, column=col).fill = red_fill
+
+    wb.save(EXCEL_FILE)
+
+
+# =========================
+# メイン
+# =========================
+if __name__ == "__main__":
+    try:
+        print("PDFを選択してください")
+        pdf_path = select_pdf()
+
+        if not pdf_path:
+            print("キャンセルされました")
+            raise SystemExit
+
+        templates = load_templates()
+
+        result, logs = recognize(pdf_path, templates)
+        formatted = format_currency(result)
+
+        print("\n=== OCR結果 ===")
+        print("対象行   :", TARGET_ROW)
+        print("生データ :", result)
+        print("金額整形 :", formatted)
+
+        print("\n=== 認識ログ ===")
+        for log in logs:
+            print(log)
+
+        save_excel(pdf_path, result, formatted, logs)
+        print("\nExcelに保存しました")
+
+        if SAVE_DEBUG_IMAGES:
+            print("debug_box.png / debug_area.png / cell_0.png ～ cell_9.png を確認してください")
+
+    except Exception as e:
+        print("\nエラーが発生しました:")
+        print(e)
