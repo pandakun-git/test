@@ -11,12 +11,10 @@
       background: #f7f9fc;
       color: #222;
     }
-
     .container {
       max-width: 960px;
       margin: 0 auto;
     }
-
     .card {
       background: #fff;
       border: 1px solid #d9e2f1;
@@ -24,11 +22,9 @@
       padding: 20px;
       margin-bottom: 20px;
     }
-
     h1, h2 {
       margin-top: 0;
     }
-
     .user-info {
       background: #eef5ff;
       border: 1px solid #cfe0ff;
@@ -36,20 +32,15 @@
       border-radius: 8px;
       margin-bottom: 16px;
     }
-
     .form-row {
       margin-bottom: 14px;
     }
-
     label {
       display: block;
       font-weight: bold;
       margin-bottom: 6px;
     }
-
-    input[type="tel"],
-    select,
-    textarea {
+    input[type="tel"], select, textarea {
       width: 100%;
       box-sizing: border-box;
       padding: 10px 12px;
@@ -58,19 +49,16 @@
       font-size: 14px;
       background: #fff;
     }
-
     textarea {
       min-height: 140px;
       resize: vertical;
     }
-
     .actions {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
       margin-top: 16px;
     }
-
     button {
       border: none;
       background: #1d70d6;
@@ -80,11 +68,9 @@
       cursor: pointer;
       font-size: 14px;
     }
-
     button.secondary {
       background: #6b7280;
     }
-
     .message {
       margin-top: 16px;
       padding: 12px;
@@ -92,70 +78,28 @@
       display: none;
       white-space: pre-wrap;
     }
-
     .message.success {
       background: #ecfdf3;
       border: 1px solid #b7ebc6;
       color: #166534;
       display: block;
     }
-
     .message.error {
       background: #fff1f2;
       border: 1px solid #fecdd3;
       color: #b42318;
       display: block;
     }
-
     .message.info {
       background: #eff6ff;
       border: 1px solid #bfdbfe;
       color: #1d4ed8;
       display: block;
     }
-
     .muted {
       color: #666;
       font-size: 13px;
     }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #fff;
-    }
-
-    th, td {
-      border: 1px solid #d8dee9;
-      padding: 10px;
-      font-size: 14px;
-      vertical-align: top;
-      text-align: left;
-    }
-
-    th {
-      background: #f3f6fb;
-    }
-
-    .status-badge {
-      display: inline-block;
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: bold;
-      background: #edf2f7;
-      color: #334155;
-      border: 1px solid #cbd5e1;
-    }
-
-    .small {
-      font-size: 12px;
-    }
-
-    .nowrap {
-      white-space: nowrap;
-    }
-
     .debug {
       margin-top: 12px;
       padding: 12px;
@@ -218,6 +162,14 @@
     </div>
   </div>
 
-  <script src="./qa-form.js"></script>
+  <script>
+    document.getElementById("debugArea").textContent += "\ninline script ok";
+  </script>
+
+  <script
+    src="./qa-form.js"
+    onload="document.getElementById('debugArea').textContent += '\nqa-form.js load ok';"
+    onerror="document.getElementById('debugArea').textContent += '\nqa-form.js load error';">
+  </script>
 </body>
 </html>
