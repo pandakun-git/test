@@ -1,0 +1,389 @@
+// ==========================================
+// 設定
+// ==========================================
+const CONFIG = {
+  LIST_TITLE: "情報依頼相談室一覧", // ← 実際のリスト名に合わせて変更
+
+  INTERNAL_NAMES: {
+    title: "Title",
+    category: "区分",         // ← 内部名に合わせて変更
+    questionBody: "質問内容", // ← 内部名に合わせて変更
+    questioner: "質問者",     // ← 内部名に合わせて変更
+    phoneNumber: "電話番号",  // ← 内部名に合わせて変更
+    questionDate: "質問日",   // ← 内部名に合わせて変更
+    status: "ステータス",     // ← 内部名に合わせて変更
+    answerBody: "回答内容",   // ← 内部名に合わせて変更
+    answerDate: "回答日"      // ← 内部名に合わせて変更
+  },
+
+  STATUS_DEFAULT: "未対応",
+  Q_PREFIX: "Q-",
+  Q_DIGITS: 4,
+  TOP_COUNT: 50
+};
+
+let currentUser = null;
+let listItemEntityTypeFullName = null;
+
+// ==========================================
+// 共通
+// ==========================================
+function webUrl() {
+  return _spPageContextInfo.webAbsoluteUrl;
+}
+
+function apiUrl(path) {
+  return `${webUrl()}${path}`;
+}
+
+function setMessage(text, type = "info") {
+  const el = document.getElementById("message");
+  if (!el) return;
+  el.className = `message ${type}`;
+  el.textContent = text;
+}
+
+function clearMessage() {
+  const el = document.getElementById("message");
+  if (!el) return;
+  el.className = "message";
+  el.textContent = "";
+}
+
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+
+  return `${y}/${m}/${day} ${hh}:${mm}`;
+}
+
+function makeQNumber(itemId) {
+  return CONFIG.Q_PREFIX + String(itemId).padStart(CONFIG.Q_DIGITS, "0");
+}
+
+async function spFetch(url, options = {}) {
+  const headers = Object.assign(
+    {
+      "Accept": "application/json;odata=verbose"
+    },
+    options.headers || {}
+  );
+
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options,
+    headers
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status}\n${text}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.indexOf("application/json") >= 0) {
+    return await response.json();
+  }
+
+  return null;
+}
+
+async function getRequestDigest() {
+  const data = await spFetch(apiUrl("/_api/contextinfo"), {
+    method: "POST",
+    headers: {
+      "Accept": "application/json;odata=verbose"
+    }
+  });
+
+  return data.d.GetContextWebInformation.FormDigestValue;
+}
+
+async function getCurrentUser() {
+  const data = await spFetch(apiUrl("/_api/web/currentuser"));
+  return data.d;
+}
+
+async function getListItemEntityTypeFullName() {
+  const url = apiUrl(
+    `/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')?$select=ListItemEntityTypeFullName`
+  );
+  const data = await spFetch(url);
+  return data.d.ListItemEntityTypeFullName;
+}
+
+// ==========================================
+// 登録処理
+// ==========================================
+function buildCreatePayload() {
+  const categoryEl = document.getElementById("category");
+  const phoneNumberEl = document.getElementById("phoneNumber");
+  const questionBodyEl = document.getElementById("questionBody");
+
+  if (!categoryEl || !phoneNumberEl || !questionBodyEl) {
+    throw new Error("画面項目が見つかりません。HTMLのidを確認してください。");
+  }
+
+  const category = categoryEl.value.trim();
+  const phoneNumber = phoneNumberEl.value.trim();
+  const questionBody = questionBodyEl.value.trim();
+
+  if (!category) {
+    throw new Error("区分を選択してください。");
+  }
+
+  if (!questionBody) {
+    throw new Error("質問内容を入力してください。");
+  }
+
+  const payload = {
+    __metadata: { type: listItemEntityTypeFullName },
+    [CONFIG.INTERNAL_NAMES.title]: "TEMP",
+    [CONFIG.INTERNAL_NAMES.category]: category,
+    [CONFIG.INTERNAL_NAMES.questionBody]: questionBody,
+    [CONFIG.INTERNAL_NAMES.questioner + "Id"]: currentUser.Id,
+    [CONFIG.INTERNAL_NAMES.questionDate]: new Date().toISOString(),
+    [CONFIG.INTERNAL_NAMES.status]: CONFIG.STATUS_DEFAULT
+  };
+
+  if (phoneNumber) {
+    payload[CONFIG.INTERNAL_NAMES.phoneNumber] = phoneNumber;
+  }
+
+  return payload;
+}
+
+async function createQuestionItem() {
+  const digest = await getRequestDigest();
+  const payload = buildCreatePayload();
+
+  const url = apiUrl(
+    `/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')/items`
+  );
+
+  const data = await spFetch(url, {
+    method: "POST",
+    headers: {
+      "Accept": "application/json;odata=verbose",
+      "Content-Type": "application/json;odata=verbose",
+      "X-RequestDigest": digest
+    },
+    body: JSON.stringify(payload)
+  });
+
+  return data.d;
+}
+
+async function updateTitleToQNumber(itemId) {
+  const digest = await getRequestDigest();
+  const qNumber = makeQNumber(itemId);
+
+  const url = apiUrl(
+    `/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')/items(${itemId})`
+  );
+
+  await spFetch(url, {
+    method: "POST",
+    headers: {
+      "Accept": "application/json;odata=verbose",
+      "Content-Type": "application/json;odata=verbose",
+      "X-RequestDigest": digest,
+      "IF-MATCH": "*",
+      "X-HTTP-Method": "MERGE"
+    },
+    body: JSON.stringify({
+      __metadata: { type: listItemEntityTypeFullName },
+      [CONFIG.INTERNAL_NAMES.title]: qNumber
+    })
+  });
+
+  return qNumber;
+}
+
+async function submitQuestion() {
+  clearMessage();
+
+  const btn = document.getElementById("submitBtn");
+  if (btn) btn.disabled = true;
+
+  try {
+    setMessage("登録中です...", "info");
+
+    const created = await createQuestionItem();
+    const itemId = created.Id;
+    const qNumber = await updateTitleToQNumber(itemId);
+
+    setMessage(`登録完了しました。\n管理番号: ${qNumber}`, "success");
+
+    document.getElementById("category").value = "";
+    document.getElementById("phoneNumber").value = "";
+    document.getElementById("questionBody").value = "";
+
+    await loadMyQuestions();
+  } catch (err) {
+    console.error(err);
+    setMessage("登録に失敗しました。\n" + err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ==========================================
+// 一覧表示
+// ==========================================
+async function loadMyQuestions() {
+  const area = document.getElementById("listArea");
+  if (!area) return;
+
+  area.textContent = "読込中...";
+
+  try {
+    const n = CONFIG.INTERNAL_NAMES;
+
+    const selectFields = [
+      "Id",
+      n.title,
+      n.category,
+      n.questionBody,
+      n.phoneNumber,
+      n.questionDate,
+      n.status,
+      n.answerBody,
+      n.answerDate,
+      `${n.questioner}/Id`,
+      `${n.questioner}/Title`,
+      `${n.questioner}/EMail`
+    ].join(",");
+
+    const expandFields = n.questioner;
+    const filter = `${n.questioner}/Id eq ${currentUser.Id}`;
+    const orderby = "Id desc";
+
+    const url =
+      apiUrl(`/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')/items`) +
+      `?$select=${encodeURIComponent(selectFields)}` +
+      `&$expand=${encodeURIComponent(expandFields)}` +
+      `&$filter=${encodeURIComponent(filter)}` +
+      `&$orderby=${encodeURIComponent(orderby)}` +
+      `&$top=${CONFIG.TOP_COUNT}`;
+
+    const data = await spFetch(url);
+    const items = data.d.results || [];
+
+    if (!items.length) {
+      area.innerHTML = '<div class="muted">まだ質問はありません。</div>';
+      return;
+    }
+
+    let html = `
+      <table>
+        <thead>
+          <tr>
+            <th class="nowrap">管理番号</th>
+            <th class="nowrap">質問日</th>
+            <th class="nowrap">区分</th>
+            <th>質問内容</th>
+            <th class="nowrap">ステータス</th>
+            <th>回答</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    items.forEach(item => {
+      const title = item[n.title] || "";
+      const category = item[n.category] || "";
+      const questionBody = item[n.questionBody] || "";
+      const questionDate = formatDate(item[n.questionDate]);
+      const status = item[n.status] || "";
+      const answerBody = item[n.answerBody] || "";
+      const answerDate = item[n.answerDate]
+        ? `<div class="small muted">回答日: ${escapeHtml(formatDate(item[n.answerDate]))}</div>`
+        : "";
+
+      html += `
+        <tr>
+          <td class="nowrap">${escapeHtml(title)}</td>
+          <td class="nowrap">${escapeHtml(questionDate)}</td>
+          <td class="nowrap">${escapeHtml(category)}</td>
+          <td>${escapeHtml(questionBody).replace(/\n/g, "<br>")}</td>
+          <td class="nowrap"><span class="status-badge">${escapeHtml(status)}</span></td>
+          <td>
+            ${answerBody ? escapeHtml(answerBody).replace(/\n/g, "<br>") : '<span class="muted">未回答</span>'}
+            ${answerDate}
+          </td>
+        </tr>
+      `;
+    });
+
+    html += `
+        </tbody>
+      </table>
+    `;
+
+    area.innerHTML = html;
+  } catch (err) {
+    console.error(err);
+    area.innerHTML = `<div style="color:#b42318;">一覧の読込に失敗しました。<br>${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// ==========================================
+// 初期化
+// ==========================================
+async function init() {
+  try {
+    currentUser = await getCurrentUser();
+    listItemEntityTypeFullName = await getListItemEntityTypeFullName();
+
+    const userNameEl = document.getElementById("currentUserName");
+    const userEmailEl = document.getElementById("currentUserEmail");
+
+    if (userNameEl) userNameEl.textContent = currentUser.Title || "";
+    if (userEmailEl) userEmailEl.textContent = currentUser.Email || "";
+
+    await loadMyQuestions();
+  } catch (err) {
+    console.error(err);
+
+    const userNameEl = document.getElementById("currentUserName");
+    if (userNameEl) userNameEl.textContent = "取得失敗";
+
+    setMessage("初期化に失敗しました。\n" + err.message, "error");
+  }
+}
+
+// ==========================================
+// イベント登録
+// ==========================================
+window.addEventListener("load", function () {
+  const submitBtn = document.getElementById("submitBtn");
+  const reloadBtn = document.getElementById("reloadBtn");
+
+  if (submitBtn) {
+    submitBtn.addEventListener("click", submitQuestion);
+  }
+
+  if (reloadBtn) {
+    reloadBtn.addEventListener("click", loadMyQuestions);
+  }
+
+  init();
+});
