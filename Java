@@ -1,6 +1,5 @@
 const CONFIG = {
-  LIST_TITLE: "情報保証相談室", // ← 実際のリスト名に合わせて変更
-
+  LIST_TITLE: "情報保証相談室", // ← 実際のリスト名
   INTERNAL_NAMES: {
     title: "Title",
     category: "区分",
@@ -13,7 +12,6 @@ const CONFIG = {
     answerDate: "回答日",
     answerer: "回答者"
   },
-
   STATUS_DEFAULT: "未対応",
   Q_PREFIX: "Q-",
   Q_DIGITS: 4,
@@ -23,11 +21,10 @@ const CONFIG = {
 let currentUser = null;
 let listItemEntityTypeFullName = null;
 
-// ================================
-// 共通
-// ================================
-function apiUrl(path) {
-  return `../_api${path}`;
+function debug(msg) {
+  const el = document.getElementById("debugArea");
+  if (!el) return;
+  el.textContent += "\n" + msg;
 }
 
 function setMessage(text, type = "info") {
@@ -72,7 +69,31 @@ function makeQNumber(itemId) {
   return CONFIG.Q_PREFIX + String(itemId).padStart(CONFIG.Q_DIGITS, "0");
 }
 
+function getSiteBaseUrl() {
+  if (typeof _spPageContextInfo !== "undefined" && _spPageContextInfo.webAbsoluteUrl) {
+    debug("using _spPageContextInfo.webAbsoluteUrl");
+    return _spPageContextInfo.webAbsoluteUrl;
+  }
+
+  const path = window.location.pathname;
+  debug("location.pathname = " + path);
+
+  const idx = path.lastIndexOf("/");
+  const folderPath = path.substring(0, idx);       // /.../oa/DocLib9
+  const sitePath = folderPath.substring(0, folderPath.lastIndexOf("/")); // /.../oa
+
+  const baseUrl = window.location.origin + sitePath;
+  debug("calculated site base = " + baseUrl);
+  return baseUrl;
+}
+
+function apiUrl(path) {
+  return getSiteBaseUrl() + "/_api" + path;
+}
+
 async function spFetch(url, options = {}) {
+  debug("fetch: " + url);
+
   const headers = Object.assign(
     {
       "Accept": "application/json;odata=verbose"
@@ -86,12 +107,17 @@ async function spFetch(url, options = {}) {
     headers
   });
 
+  debug("response status: " + response.status);
+
   if (!response.ok) {
     const text = await response.text();
+    debug("response error body: " + text);
     throw new Error(`HTTP ${response.status}\n${text}`);
   }
 
   const contentType = response.headers.get("content-type") || "";
+  debug("content-type: " + contentType);
+
   if (contentType.indexOf("application/json") >= 0) {
     return await response.json();
   }
@@ -123,9 +149,6 @@ async function getListItemEntityTypeFullName() {
   return data.d.ListItemEntityTypeFullName;
 }
 
-// ================================
-// 登録処理
-// ================================
 function buildCreatePayload() {
   const categoryEl = document.getElementById("category");
   const phoneNumberEl = document.getElementById("phoneNumber");
@@ -232,16 +255,13 @@ async function submitQuestion() {
 
     await loadQuestions();
   } catch (err) {
-    console.error(err);
+    debug("submitQuestion error: " + err.message);
     setMessage("登録に失敗しました。\n" + err.message, "error");
   } finally {
     if (btn) btn.disabled = false;
   }
 }
 
-// ================================
-// 一覧表示（全ユーザ分表示）
-// ================================
 async function loadQuestions() {
   const area = document.getElementById("listArea");
   if (!area) return;
@@ -256,21 +276,18 @@ async function loadQuestions() {
       n.title,
       n.category,
       n.questionBody,
-      n.phoneNumber,
       n.questionDate,
       n.status,
       n.answerBody,
       n.answerDate,
       `${n.questioner}/Id`,
       `${n.questioner}/Title`,
-      `${n.questioner}/EMail`,
       `${n.answerer}/Id`,
-      `${n.answerer}/Title`,
-      `${n.answerer}/EMail`
+      `${n.answerer}/Title`
     ].join(",");
 
     const expandFields = [n.questioner, n.answerer].join(",");
-    const orderby = `${n.questionDate} desc`;
+    const orderby = "Id desc";
 
     const url =
       apiUrl(`/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')/items`) +
@@ -282,6 +299,8 @@ async function loadQuestions() {
     const data = await spFetch(url);
     const items = data.d.results || [];
 
+    debug("items loaded: " + items.length);
+
     if (!items.length) {
       area.innerHTML = '<div class="muted">まだ質問はありません。</div>';
       return;
@@ -291,12 +310,12 @@ async function loadQuestions() {
       <table>
         <thead>
           <tr>
-            <th class="nowrap">管理番号</th>
-            <th class="nowrap">質問日</th>
-            <th class="nowrap">区分</th>
-            <th class="nowrap">質問者</th>
+            <th>管理番号</th>
+            <th>質問日</th>
+            <th>区分</th>
+            <th>質問者</th>
             <th>質問内容</th>
-            <th class="nowrap">ステータス</th>
+            <th>ステータス</th>
             <th>回答</th>
           </tr>
         </thead>
@@ -304,62 +323,50 @@ async function loadQuestions() {
     `;
 
     items.forEach(item => {
-      const title = item[n.title] || "";
-      const category = item[n.category] || "";
-      const questionBody = item[n.questionBody] || "";
-      const questionDate = formatDate(item[n.questionDate]);
-      const status = item[n.status] || "";
-      const answerBody = item[n.answerBody] || "";
-      const questionerName = item[n.questioner] && item[n.questioner].Title
-        ? item[n.questioner].Title
-        : "";
-      const answererName = item[n.answerer] && item[n.answerer].Title
-        ? item[n.answerer].Title
-        : "";
+      const n = CONFIG.INTERNAL_NAMES;
+      const questionerName = item[n.questioner] && item[n.questioner].Title ? item[n.questioner].Title : "";
+      const answererName = item[n.answerer] && item[n.answerer].Title ? item[n.answerer].Title : "";
       const answerDate = item[n.answerDate] ? formatDate(item[n.answerDate]) : "";
 
       let answerHtml = '<span class="muted">未回答</span>';
-      if (answerBody) {
+      if (item[n.answerBody]) {
         answerHtml =
-          `${escapeHtml(answerBody).replace(/\n/g, "<br>")}` +
+          `${escapeHtml(item[n.answerBody]).replace(/\n/g, "<br>")}` +
           (answererName ? `<div class="small muted">回答者: ${escapeHtml(answererName)}</div>` : "") +
           (answerDate ? `<div class="small muted">回答日: ${escapeHtml(answerDate)}</div>` : "");
       }
 
       html += `
         <tr>
-          <td class="nowrap">${escapeHtml(title)}</td>
-          <td class="nowrap">${escapeHtml(questionDate)}</td>
-          <td class="nowrap">${escapeHtml(category)}</td>
-          <td class="nowrap">${escapeHtml(questionerName)}</td>
-          <td>${escapeHtml(questionBody).replace(/\n/g, "<br>")}</td>
-          <td class="nowrap"><span class="status-badge">${escapeHtml(status)}</span></td>
+          <td>${escapeHtml(item[n.title] || "")}</td>
+          <td>${escapeHtml(formatDate(item[n.questionDate]))}</td>
+          <td>${escapeHtml(item[n.category] || "")}</td>
+          <td>${escapeHtml(questionerName)}</td>
+          <td>${escapeHtml(item[n.questionBody] || "").replace(/\n/g, "<br>")}</td>
+          <td>${escapeHtml(item[n.status] || "")}</td>
           <td>${answerHtml}</td>
         </tr>
       `;
     });
 
-    html += `
-        </tbody>
-      </table>
-    `;
-
+    html += "</tbody></table>";
     area.innerHTML = html;
   } catch (err) {
-    console.error(err);
+    debug("loadQuestions error: " + err.message);
     area.innerHTML = `<div style="color:#b42318;">一覧の読込に失敗しました。<br>${escapeHtml(err.message)}</div>`;
   }
 }
 
-// ================================
-// 初期化
-// ================================
 async function init() {
   try {
+    debug("init start");
     setMessage("初期化中です...", "info");
 
     currentUser = await getCurrentUser();
+    debug("currentUser = " + JSON.stringify(currentUser));
+
     listItemEntityTypeFullName = await getListItemEntityTypeFullName();
+    debug("entityType = " + listItemEntityTypeFullName);
 
     const userNameEl = document.getElementById("currentUserName");
     const userEmailEl = document.getElementById("currentUserEmail");
@@ -370,7 +377,7 @@ async function init() {
     clearMessage();
     await loadQuestions();
   } catch (err) {
-    console.error(err);
+    debug("init error: " + err.message);
 
     const userNameEl = document.getElementById("currentUserName");
     if (userNameEl) userNameEl.textContent = "取得失敗";
@@ -379,19 +386,23 @@ async function init() {
   }
 }
 
-// ================================
-// イベント登録
-// ================================
 window.addEventListener("load", function () {
+  debug("window load");
   const submitBtn = document.getElementById("submitBtn");
   const reloadBtn = document.getElementById("reloadBtn");
 
   if (submitBtn) {
     submitBtn.addEventListener("click", submitQuestion);
+    debug("submitBtn bind ok");
+  } else {
+    debug("submitBtn not found");
   }
 
   if (reloadBtn) {
     reloadBtn.addEventListener("click", loadQuestions);
+    debug("reloadBtn bind ok");
+  } else {
+    debug("reloadBtn not found");
   }
 
   init();
