@@ -7,8 +7,20 @@ function debug(msg) {
 
 debug("JS start");
 
-var LIST_TITLE = "情報保証相談室"; // ← リストの表示名
+// ================================
+// 設定
+// ================================
+var LIST_TITLE = "情報保証相談室";
 
+var COL = {
+  TITLE: "Title",
+  QUESTION: "_x8cea__x554f__x5185__x5bb9_",
+  ANSWER: "_x56de__x7b54__x5185__x5bb9_"
+};
+
+// ================================
+// 共通
+// ================================
 function getBaseUrl() {
   var path = location.pathname;
   var idx = path.lastIndexOf("/");
@@ -26,14 +38,29 @@ function escapeHtml(value) {
   return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function setMessage(text) {
   var el = document.getElementById("message");
-  if (el) el.innerHTML = escapeHtml(text);
+  if (el) {
+    el.innerHTML = escapeHtml(text);
+  }
 }
 
+// HTML文字列からタグだけざっくり除去して見やすくする
+function stripHtml(html) {
+  if (html === null || html === undefined) return "";
+  var div = document.createElement("div");
+  div.innerHTML = html;
+  return div.textContent || div.innerText || "";
+}
+
+// ================================
+// XHR
+// ================================
 function xhrJson(method, url, body, extraHeaders, callback) {
   debug("xhr: " + method + " " + url);
 
@@ -76,6 +103,9 @@ function xhrJson(method, url, body, extraHeaders, callback) {
   xhr.send(body || null);
 }
 
+// ================================
+// API
+// ================================
 function getCurrentUser(callback) {
   xhrJson("GET", api("/web/currentuser"), null, null, callback);
 }
@@ -84,6 +114,7 @@ function loadQuestions() {
   debug("loadQuestions start");
 
   var url = api("/web/lists/getbytitle('" + encodeURIComponent(LIST_TITLE) + "')/items?$orderby=ID desc&$top=100");
+
   xhrJson("GET", url, null, null, function (err, data) {
     var area = document.getElementById("listArea");
     if (!area) return;
@@ -96,6 +127,10 @@ function loadQuestions() {
 
     var items = (data && data.d && data.d.results) ? data.d.results : [];
     debug("items count: " + items.length);
+
+    if (items.length > 0) {
+      debug("first item json: " + JSON.stringify(items[0]));
+    }
 
     if (!items.length) {
       area.innerHTML = "まだ質問はありません。";
@@ -111,10 +146,18 @@ function loadQuestions() {
 
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
+
+      debug("question field value = " + item[COL.QUESTION]);
+      debug("answer field value = " + item[COL.ANSWER]);
+
+      var title = item[COL.TITLE] || "";
+      var question = stripHtml(item[COL.QUESTION] || "");
+      var answer = stripHtml(item[COL.ANSWER] || "");
+
       html += "<tr>";
-      html += "<td style='padding:8px;'>" + escapeHtml(item.Title || "") + "</td>";
-      html += "<td style='padding:8px;'>" + escapeHtml(item["質問内容"] || "") + "</td>";
-      html += "<td style='padding:8px;'>" + escapeHtml(item["回答内容"] || "未回答") + "</td>";
+      html += "<td style='padding:8px;'>" + escapeHtml(title) + "</td>";
+      html += "<td style='padding:8px;'>" + escapeHtml(question) + "</td>";
+      html += "<td style='padding:8px;'>" + escapeHtml(answer || "未回答") + "</td>";
       html += "</tr>";
     }
 
@@ -123,10 +166,16 @@ function loadQuestions() {
   });
 }
 
+// ================================
+// 登録（まだダミー）
+// ================================
 function submitQuestion() {
-  alert("まずは表示確認中。登録処理は次で入れる。");
+  alert("一覧表示は動作中。登録処理は次で入れる。");
 }
 
+// ================================
+// 初期化
+// ================================
 function init() {
   debug("init start");
 
