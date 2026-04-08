@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Q&A質問フォーム</title>
+  <style>
+    body {
+      font-family: "Yu Gothic", "Meiryo", sans-serif;
+      margin: 24px;
+      background: #f7f9fc;
+      color: #222;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #d9e2f1;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    h1, h2 {
+      margin-top: 0;
+    }
+
+    .user-info {
+      background: #eef5ff;
+      border: 1px solid #cfe0ff;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+
+    .form-row {
+      margin-bottom: 14px;
+    }
+
+    label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+
+    input[type="tel"],
+    select,
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1px solid #c8d2e1;
+      border-radius: 6px;
+      font-size: 14px;
+      background: #fff;
+    }
+
+    textarea {
+      min-height: 140px;
+      resize: vertical;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+
+    button {
+      border: none;
+      background: #1d70d6;
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button.secondary {
+      background: #6b7280;
+    }
+
+    .message {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 6px;
+      display: none;
+      white-space: pre-wrap;
+    }
+
+    .message.success {
+      background: #ecfdf3;
+      border: 1px solid #b7ebc6;
+      color: #166534;
+      display: block;
+    }
+
+    .message.error {
+      background: #fff1f2;
+      border: 1px solid #fecdd3;
+      color: #b42318;
+      display: block;
+    }
+
+    .message.info {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1d4ed8;
+      display: block;
+    }
+
+    .muted {
+      color: #666;
+      font-size: 13px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+    }
+
+    th, td {
+      border: 1px solid #d8dee9;
+      padding: 10px;
+      font-size: 14px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f3f6fb;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: bold;
+      background: #edf2f7;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+    }
+
+    .small {
+      font-size: 12px;
+    }
+
+    .nowrap {
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Q&A質問フォーム</h1>
+
+    <div class="card">
+      <div class="user-info">
+        <div><strong>ログインユーザ:</strong> <span id="currentUserName">取得中...</span></div>
+        <div class="muted"><span id="currentUserEmail"></span></div>
+      </div>
+
+      <div class="form-row">
+        <label for="category">区分</label>
+        <select id="category">
+          <option value="">選択してください</option>
+          <option value="システム">システム</option>
+          <option value="手続き">手続き</option>
+          <option value="総務">総務</option>
+          <option value="人事">人事</option>
+          <option value="その他">その他</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="phoneNumber">電話番号</label>
+        <input id="phoneNumber" type="tel" placeholder="任意入力" />
+      </div>
+
+      <div class="form-row">
+        <label for="questionBody">質問内容</label>
+        <textarea id="questionBody" placeholder="質問内容を入力してください"></textarea>
+      </div>
+
+      <div class="actions">
+        <button id="submitBtn" type="button">質問を登録する</button>
+        <button id="reloadBtn" type="button" class="secondary">一覧を再読込</button>
+      </div>
+
+      <div id="message" class="message"></div>
+    </div>
+
+    <div class="card">
+      <h2>自分の質問一覧</h2>
+      <div class="muted" style="margin-bottom: 12px;">
+        ログイン中のユーザが登録した質問のみ表示します。
+      </div>
+      <div id="listArea">読込中...</div>
+    </div>
+  </div>
+
+  <!-- 保存先に合わせてパスを書き換えてね -->
+  <script src="/sites/サイト名/SiteAssets/qa-form.js"></script>
+</body>
+</html>
