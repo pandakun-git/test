@@ -1,15 +1,14 @@
-// ===== デバッグ =====
 function debug(msg) {
   var el = document.getElementById("debugArea");
-  if (el) el.textContent += "\n" + msg;
+  if (el) {
+    el.textContent += "\n" + msg;
+  }
 }
 
-debug("JS start"); // ← ここ超重要
+debug("JS start");
 
-// ===== 設定 =====
-var LIST_TITLE = "情報保証相談室";
+var LIST_TITLE = "情報保証相談室"; // ← リストの表示名
 
-// ===== API URL =====
 function getBaseUrl() {
   var path = location.pathname;
   var idx = path.lastIndexOf("/");
@@ -22,82 +21,141 @@ function api(path) {
   return getBaseUrl() + "/_api" + path;
 }
 
-// ===== 共通Fetch =====
-function spFetch(url, opt) {
-  debug("fetch: " + url);
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
-  return fetch(url, {
-    credentials: "same-origin",
-    headers: {
-      "Accept": "application/json;odata=verbose"
+function setMessage(text) {
+  var el = document.getElementById("message");
+  if (el) el.innerHTML = escapeHtml(text);
+}
+
+function xhrJson(method, url, body, extraHeaders, callback) {
+  debug("xhr: " + method + " " + url);
+
+  var xhr = new XMLHttpRequest();
+  xhr.open(method, url, true);
+  xhr.withCredentials = true;
+  xhr.setRequestHeader("Accept", "application/json;odata=verbose");
+
+  if (extraHeaders) {
+    for (var k in extraHeaders) {
+      if (extraHeaders.hasOwnProperty(k)) {
+        xhr.setRequestHeader(k, extraHeaders[k]);
+      }
     }
-  })
-  .then(function(res){
-    debug("status: " + res.status);
-    if(!res.ok) throw new Error("HTTP " + res.status);
-    return res.json();
-  });
+  }
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4) {
+      debug("status: " + xhr.status);
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        var data = null;
+        try {
+          data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch (e) {
+          callback(new Error("JSON parse error: " + e.message));
+          return;
+        }
+        callback(null, data);
+      } else {
+        callback(new Error("HTTP " + xhr.status + " " + xhr.responseText));
+      }
+    }
+  };
+
+  xhr.onerror = function () {
+    callback(new Error("通信エラー"));
+  };
+
+  xhr.send(body || null);
 }
 
-// ===== 初期化 =====
-function init() {
-  debug("init start");
-
-  spFetch(api("/web/currentuser"))
-  .then(function(data){
-    debug("user ok");
-
-    document.getElementById("currentUserName").textContent =
-      data.d.Title;
-
-    return spFetch(api("/web/lists/getbytitle('" + LIST_TITLE + "')"));
-  })
-  .then(function(){
-    debug("list ok");
-    return loadList();
-  })
-  .catch(function(e){
-    debug("init error: " + e.message);
-  });
+function getCurrentUser(callback) {
+  xhrJson("GET", api("/web/currentuser"), null, null, callback);
 }
 
-// ===== 一覧 =====
-function loadList() {
-  debug("load list");
+function loadQuestions() {
+  debug("loadQuestions start");
 
-  return spFetch(api("/web/lists/getbytitle('" + LIST_TITLE + "')/items"))
-  .then(function(data){
+  var url = api("/web/lists/getbytitle('" + encodeURIComponent(LIST_TITLE) + "')/items?$orderby=ID desc&$top=100");
+  xhrJson("GET", url, null, null, function (err, data) {
+    var area = document.getElementById("listArea");
+    if (!area) return;
 
-    var items = data.d.results;
-    debug("items: " + items.length);
+    if (err) {
+      debug("loadQuestions error: " + err.message);
+      area.innerHTML = "<div style='color:red;'>一覧取得失敗</div>";
+      return;
+    }
 
-    var html = "<table border='1'><tr><th>No</th><th>質問</th><th>回答</th></tr>";
+    var items = (data && data.d && data.d.results) ? data.d.results : [];
+    debug("items count: " + items.length);
 
-    for(var i=0;i<items.length;i++){
-      html += "<tr>"
-        + "<td>" + (items[i].Title || "") + "</td>"
-        + "<td>" + (items[i].質問内容 || "") + "</td>"
-        + "<td>" + (items[i].回答内容 || "未回答") + "</td>"
-        + "</tr>";
+    if (!items.length) {
+      area.innerHTML = "まだ質問はありません。";
+      return;
+    }
+
+    var html = "<table border='1' style='border-collapse:collapse; width:100%;'>";
+    html += "<tr>";
+    html += "<th style='padding:8px;'>管理番号</th>";
+    html += "<th style='padding:8px;'>質問内容</th>";
+    html += "<th style='padding:8px;'>回答内容</th>";
+    html += "</tr>";
+
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      html += "<tr>";
+      html += "<td style='padding:8px;'>" + escapeHtml(item.Title || "") + "</td>";
+      html += "<td style='padding:8px;'>" + escapeHtml(item["質問内容"] || "") + "</td>";
+      html += "<td style='padding:8px;'>" + escapeHtml(item["回答内容"] || "未回答") + "</td>";
+      html += "</tr>";
     }
 
     html += "</table>";
-
-    document.getElementById("listArea").innerHTML = html;
+    area.innerHTML = html;
   });
 }
 
-// ===== 登録 =====
 function submitQuestion() {
-  alert("ここはあとでやる（まず表示確認）");
+  alert("まずは表示確認中。登録処理は次で入れる。");
 }
 
-// ===== イベント =====
-window.onload = function(){
+function init() {
+  debug("init start");
+
+  getCurrentUser(function (err, data) {
+    if (err) {
+      debug("currentuser error: " + err.message);
+      setMessage("ログインユーザ取得失敗");
+      return;
+    }
+
+    debug("user ok");
+
+    var nameEl = document.getElementById("currentUserName");
+    if (nameEl && data && data.d) {
+      nameEl.textContent = data.d.Title || "取得失敗";
+    }
+
+    loadQuestions();
+  });
+}
+
+window.onload = function () {
   debug("window load");
 
-  document.getElementById("submitBtn").onclick = submitQuestion;
-  document.getElementById("reloadBtn").onclick = loadList;
+  var submitBtn = document.getElementById("submitBtn");
+  var reloadBtn = document.getElementById("reloadBtn");
+
+  if (submitBtn) submitBtn.onclick = submitQuestion;
+  if (reloadBtn) reloadBtn.onclick = loadQuestions;
 
   init();
 };
