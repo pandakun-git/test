@@ -1,5 +1,9 @@
+// ================================
+// 設定
+// ================================
 const CONFIG = {
-  LIST_TITLE: "情報保証相談室", // ← 実際のリスト名
+  LIST_TITLE: "情報保証相談室", // ← 必ず表示名に合わせる！！
+
   INTERNAL_NAMES: {
     title: "Title",
     category: "区分",
@@ -12,6 +16,7 @@ const CONFIG = {
     answerDate: "回答日",
     answerer: "回答者"
   },
+
   STATUS_DEFAULT: "未対応",
   Q_PREFIX: "Q-",
   Q_DIGITS: 4,
@@ -21,10 +26,36 @@ const CONFIG = {
 let currentUser = null;
 let listItemEntityTypeFullName = null;
 
+// ================================
+// デバッグ
+// ================================
 function debug(msg) {
   const el = document.getElementById("debugArea");
   if (!el) return;
   el.textContent += "\n" + msg;
+}
+
+// ================================
+// 共通
+// ================================
+function getSiteBaseUrl() {
+  if (typeof _spPageContextInfo !== "undefined" && _spPageContextInfo.webAbsoluteUrl) {
+    debug("use _spPageContextInfo");
+    return _spPageContextInfo.webAbsoluteUrl;
+  }
+
+  const path = window.location.pathname;
+  const idx = path.lastIndexOf("/");
+  const folderPath = path.substring(0, idx);
+  const sitePath = folderPath.substring(0, folderPath.lastIndexOf("/"));
+
+  const base = window.location.origin + sitePath;
+  debug("calculated base: " + base);
+  return base;
+}
+
+function apiUrl(path) {
+  return getSiteBaseUrl() + "/_api" + path;
 }
 
 function setMessage(text, type = "info") {
@@ -42,98 +73,47 @@ function clearMessage() {
 }
 
 function escapeHtml(value) {
-  if (value === null || value === undefined) return "";
+  if (!value) return "";
   return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replace(/>/g, "&gt;");
 }
 
 function formatDate(value) {
   if (!value) return "";
   const d = new Date(value);
-  if (isNaN(d.getTime())) return value;
-
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-
-  return `${y}/${m}/${day} ${hh}:${mm}`;
+  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
 }
 
-function makeQNumber(itemId) {
-  return CONFIG.Q_PREFIX + String(itemId).padStart(CONFIG.Q_DIGITS, "0");
+function makeQNumber(id) {
+  return CONFIG.Q_PREFIX + String(id).padStart(CONFIG.Q_DIGITS, "0");
 }
 
-function getSiteBaseUrl() {
-  if (typeof _spPageContextInfo !== "undefined" && _spPageContextInfo.webAbsoluteUrl) {
-    debug("using _spPageContextInfo.webAbsoluteUrl");
-    return _spPageContextInfo.webAbsoluteUrl;
-  }
-
-  const path = window.location.pathname;
-  debug("location.pathname = " + path);
-
-  const idx = path.lastIndexOf("/");
-  const folderPath = path.substring(0, idx);       // /.../oa/DocLib9
-  const sitePath = folderPath.substring(0, folderPath.lastIndexOf("/")); // /.../oa
-
-  const baseUrl = window.location.origin + sitePath;
-  debug("calculated site base = " + baseUrl);
-  return baseUrl;
-}
-
-function apiUrl(path) {
-  return getSiteBaseUrl() + "/_api" + path;
-}
-
+// ================================
+// REST
+// ================================
 async function spFetch(url, options = {}) {
   debug("fetch: " + url);
 
-  const headers = Object.assign(
-    {
-      "Accept": "application/json;odata=verbose"
-    },
-    options.headers || {}
-  );
-
-  const response = await fetch(url, {
+  const res = await fetch(url, {
     credentials: "same-origin",
-    ...options,
-    headers
-  });
-
-  debug("response status: " + response.status);
-
-  if (!response.ok) {
-    const text = await response.text();
-    debug("response error body: " + text);
-    throw new Error(`HTTP ${response.status}\n${text}`);
-  }
-
-  const contentType = response.headers.get("content-type") || "";
-  debug("content-type: " + contentType);
-
-  if (contentType.indexOf("application/json") >= 0) {
-    return await response.json();
-  }
-
-  return null;
-}
-
-async function getRequestDigest() {
-  const data = await spFetch(apiUrl("/contextinfo"), {
-    method: "POST",
     headers: {
-      "Accept": "application/json;odata=verbose"
-    }
+      "Accept": "application/json;odata=verbose",
+      ...options.headers
+    },
+    ...options
   });
 
-  return data.d.GetContextWebInformation.FormDigestValue;
+  debug("status: " + res.status);
+
+  if (!res.ok) {
+    const text = await res.text();
+    debug(text);
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  return await res.json();
 }
 
 async function getCurrentUser() {
@@ -141,269 +121,157 @@ async function getCurrentUser() {
   return data.d;
 }
 
-async function getListItemEntityTypeFullName() {
-  const url = apiUrl(
-    `/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')?$select=ListItemEntityTypeFullName`
+async function getDigest() {
+  const data = await spFetch(apiUrl("/contextinfo"), { method: "POST" });
+  return data.d.GetContextWebInformation.FormDigestValue;
+}
+
+async function getEntityType() {
+  const data = await spFetch(
+    apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')?$select=ListItemEntityTypeFullName`)
   );
-  const data = await spFetch(url);
   return data.d.ListItemEntityTypeFullName;
 }
 
-function buildCreatePayload() {
-  const categoryEl = document.getElementById("category");
-  const phoneNumberEl = document.getElementById("phoneNumber");
-  const questionBodyEl = document.getElementById("questionBody");
+// ================================
+// 登録
+// ================================
+function buildPayload() {
+  const n = CONFIG.INTERNAL_NAMES;
 
-  if (!categoryEl || !phoneNumberEl || !questionBodyEl) {
-    throw new Error("画面項目が見つかりません。HTMLのidを確認してください。");
-  }
-
-  const category = categoryEl.value.trim();
-  const phoneNumber = phoneNumberEl.value.trim();
-  const questionBody = questionBodyEl.value.trim();
-
-  if (!category) {
-    throw new Error("区分を選択してください。");
-  }
-
-  if (!questionBody) {
-    throw new Error("質問内容を入力してください。");
-  }
-
-  const payload = {
+  return {
     __metadata: { type: listItemEntityTypeFullName },
-    [CONFIG.INTERNAL_NAMES.title]: "TEMP",
-    [CONFIG.INTERNAL_NAMES.category]: category,
-    [CONFIG.INTERNAL_NAMES.questionBody]: questionBody,
-    [CONFIG.INTERNAL_NAMES.questioner + "Id"]: currentUser.Id,
-    [CONFIG.INTERNAL_NAMES.questionDate]: new Date().toISOString(),
-    [CONFIG.INTERNAL_NAMES.status]: CONFIG.STATUS_DEFAULT
+    [n.title]: "TEMP",
+    [n.category]: document.getElementById("category").value,
+    [n.questionBody]: document.getElementById("questionBody").value,
+    [n.phoneNumber]: document.getElementById("phoneNumber").value,
+    [n.questioner + "Id"]: currentUser.Id,
+    [n.questionDate]: new Date().toISOString(),
+    [n.status]: CONFIG.STATUS_DEFAULT
   };
-
-  if (phoneNumber) {
-    payload[CONFIG.INTERNAL_NAMES.phoneNumber] = phoneNumber;
-  }
-
-  return payload;
 }
 
-async function createQuestionItem() {
-  const digest = await getRequestDigest();
-  const payload = buildCreatePayload();
+async function createItem() {
+  const digest = await getDigest();
 
-  const url = apiUrl(
-    `/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')/items`
+  const data = await spFetch(
+    apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')/items`),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json;odata=verbose",
+        "X-RequestDigest": digest
+      },
+      body: JSON.stringify(buildPayload())
+    }
   );
-
-  const data = await spFetch(url, {
-    method: "POST",
-    headers: {
-      "Accept": "application/json;odata=verbose",
-      "Content-Type": "application/json;odata=verbose",
-      "X-RequestDigest": digest
-    },
-    body: JSON.stringify(payload)
-  });
 
   return data.d;
 }
 
-async function updateTitleToQNumber(itemId) {
-  const digest = await getRequestDigest();
-  const qNumber = makeQNumber(itemId);
+async function updateTitle(id) {
+  const digest = await getDigest();
+  const n = CONFIG.INTERNAL_NAMES;
 
-  const url = apiUrl(
-    `/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')/items(${itemId})`
+  await spFetch(
+    apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')/items(${id})`),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json;odata=verbose",
+        "X-RequestDigest": digest,
+        "IF-MATCH": "*",
+        "X-HTTP-Method": "MERGE"
+      },
+      body: JSON.stringify({
+        __metadata: { type: listItemEntityTypeFullName },
+        [n.title]: makeQNumber(id)
+      })
+    }
   );
-
-  await spFetch(url, {
-    method: "POST",
-    headers: {
-      "Accept": "application/json;odata=verbose",
-      "Content-Type": "application/json;odata=verbose",
-      "X-RequestDigest": digest,
-      "IF-MATCH": "*",
-      "X-HTTP-Method": "MERGE"
-    },
-    body: JSON.stringify({
-      __metadata: { type: listItemEntityTypeFullName },
-      [CONFIG.INTERNAL_NAMES.title]: qNumber
-    })
-  });
-
-  return qNumber;
 }
 
 async function submitQuestion() {
-  clearMessage();
-
-  const btn = document.getElementById("submitBtn");
-  if (btn) btn.disabled = true;
-
   try {
-    setMessage("登録中です...", "info");
-
-    const created = await createQuestionItem();
-    const itemId = created.Id;
-    const qNumber = await updateTitleToQNumber(itemId);
-
-    setMessage(`登録完了しました。\n管理番号: ${qNumber}`, "success");
-
-    document.getElementById("category").value = "";
-    document.getElementById("phoneNumber").value = "";
-    document.getElementById("questionBody").value = "";
-
-    await loadQuestions();
-  } catch (err) {
-    debug("submitQuestion error: " + err.message);
-    setMessage("登録に失敗しました。\n" + err.message, "error");
-  } finally {
-    if (btn) btn.disabled = false;
+    setMessage("登録中...");
+    const item = await createItem();
+    await updateTitle(item.Id);
+    setMessage("登録完了", "success");
+    loadQuestions();
+  } catch (e) {
+    debug(e.message);
+    setMessage("失敗：" + e.message, "error");
   }
 }
 
+// ================================
+// 一覧（全件）
+// ================================
 async function loadQuestions() {
   const area = document.getElementById("listArea");
-  if (!area) return;
-
-  area.textContent = "読込中...";
+  const n = CONFIG.INTERNAL_NAMES;
 
   try {
-    const n = CONFIG.INTERNAL_NAMES;
+    const data = await spFetch(
+      apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')/items?$top=100`)
+    );
 
-    const selectFields = [
-      "Id",
-      n.title,
-      n.category,
-      n.questionBody,
-      n.questionDate,
-      n.status,
-      n.answerBody,
-      n.answerDate,
-      `${n.questioner}/Id`,
-      `${n.questioner}/Title`,
-      `${n.answerer}/Id`,
-      `${n.answerer}/Title`
-    ].join(",");
+    const items = data.d.results;
 
-    const expandFields = [n.questioner, n.answerer].join(",");
-    const orderby = "Id desc";
+    debug("items: " + items.length);
 
-    const url =
-      apiUrl(`/web/lists/getbytitle('${encodeURIComponent(CONFIG.LIST_TITLE)}')/items`) +
-      `?$select=${encodeURIComponent(selectFields)}` +
-      `&$expand=${encodeURIComponent(expandFields)}` +
-      `&$orderby=${encodeURIComponent(orderby)}` +
-      `&$top=${CONFIG.TOP_COUNT}`;
+    let html = "<table><tr><th>No</th><th>内容</th><th>回答</th></tr>";
 
-    const data = await spFetch(url);
-    const items = data.d.results || [];
-
-    debug("items loaded: " + items.length);
-
-    if (!items.length) {
-      area.innerHTML = '<div class="muted">まだ質問はありません。</div>';
-      return;
-    }
-
-    let html = `
-      <table>
-        <thead>
-          <tr>
-            <th>管理番号</th>
-            <th>質問日</th>
-            <th>区分</th>
-            <th>質問者</th>
-            <th>質問内容</th>
-            <th>ステータス</th>
-            <th>回答</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-
-    items.forEach(item => {
-      const n = CONFIG.INTERNAL_NAMES;
-      const questionerName = item[n.questioner] && item[n.questioner].Title ? item[n.questioner].Title : "";
-      const answererName = item[n.answerer] && item[n.answerer].Title ? item[n.answerer].Title : "";
-      const answerDate = item[n.answerDate] ? formatDate(item[n.answerDate]) : "";
-
-      let answerHtml = '<span class="muted">未回答</span>';
-      if (item[n.answerBody]) {
-        answerHtml =
-          `${escapeHtml(item[n.answerBody]).replace(/\n/g, "<br>")}` +
-          (answererName ? `<div class="small muted">回答者: ${escapeHtml(answererName)}</div>` : "") +
-          (answerDate ? `<div class="small muted">回答日: ${escapeHtml(answerDate)}</div>` : "");
-      }
-
+    items.forEach(i => {
       html += `
         <tr>
-          <td>${escapeHtml(item[n.title] || "")}</td>
-          <td>${escapeHtml(formatDate(item[n.questionDate]))}</td>
-          <td>${escapeHtml(item[n.category] || "")}</td>
-          <td>${escapeHtml(questionerName)}</td>
-          <td>${escapeHtml(item[n.questionBody] || "").replace(/\n/g, "<br>")}</td>
-          <td>${escapeHtml(item[n.status] || "")}</td>
-          <td>${answerHtml}</td>
+          <td>${i[n.title]}</td>
+          <td>${escapeHtml(i[n.questionBody])}</td>
+          <td>${escapeHtml(i[n.answerBody] || "未回答")}</td>
         </tr>
       `;
     });
 
-    html += "</tbody></table>";
+    html += "</table>";
     area.innerHTML = html;
-  } catch (err) {
-    debug("loadQuestions error: " + err.message);
-    area.innerHTML = `<div style="color:#b42318;">一覧の読込に失敗しました。<br>${escapeHtml(err.message)}</div>`;
+
+  } catch (e) {
+    debug(e.message);
+    area.innerHTML = "読込失敗";
   }
 }
 
+// ================================
+// 初期化
+// ================================
 async function init() {
   try {
-    debug("init start");
-    setMessage("初期化中です...", "info");
+    debug("init");
 
     currentUser = await getCurrentUser();
-    debug("currentUser = " + JSON.stringify(currentUser));
+    debug("user ok");
 
-    listItemEntityTypeFullName = await getListItemEntityTypeFullName();
-    debug("entityType = " + listItemEntityTypeFullName);
+    listItemEntityTypeFullName = await getEntityType();
+    debug("list ok");
 
-    const userNameEl = document.getElementById("currentUserName");
-    const userEmailEl = document.getElementById("currentUserEmail");
+    document.getElementById("currentUserName").textContent = currentUser.Title;
 
-    if (userNameEl) userNameEl.textContent = currentUser.Title || "";
-    if (userEmailEl) userEmailEl.textContent = currentUser.Email || "";
-
-    clearMessage();
     await loadQuestions();
-  } catch (err) {
-    debug("init error: " + err.message);
 
-    const userNameEl = document.getElementById("currentUserName");
-    if (userNameEl) userNameEl.textContent = "取得失敗";
-
-    setMessage("初期化に失敗しました。\n" + err.message, "error");
+  } catch (e) {
+    debug("init error: " + e.message);
+    setMessage(e.message, "error");
   }
 }
 
-window.addEventListener("load", function () {
+// ================================
+// イベント
+// ================================
+window.addEventListener("load", () => {
   debug("window load");
-  const submitBtn = document.getElementById("submitBtn");
-  const reloadBtn = document.getElementById("reloadBtn");
 
-  if (submitBtn) {
-    submitBtn.addEventListener("click", submitQuestion);
-    debug("submitBtn bind ok");
-  } else {
-    debug("submitBtn not found");
-  }
-
-  if (reloadBtn) {
-    reloadBtn.addEventListener("click", loadQuestions);
-    debug("reloadBtn bind ok");
-  } else {
-    debug("reloadBtn not found");
-  }
+  document.getElementById("submitBtn").onclick = submitQuestion;
+  document.getElementById("reloadBtn").onclick = loadQuestions;
 
   init();
 });
