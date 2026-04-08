@@ -1,277 +1,103 @@
-// ================================
-// 設定
-// ================================
-const CONFIG = {
-  LIST_TITLE: "情報保証相談室", // ← 必ず表示名に合わせる！！
-
-  INTERNAL_NAMES: {
-    title: "Title",
-    category: "区分",
-    questionBody: "質問内容",
-    questioner: "質問者",
-    phoneNumber: "電話番号",
-    questionDate: "質問日",
-    status: "ステータス",
-    answerBody: "回答内容",
-    answerDate: "回答日",
-    answerer: "回答者"
-  },
-
-  STATUS_DEFAULT: "未対応",
-  Q_PREFIX: "Q-",
-  Q_DIGITS: 4,
-  TOP_COUNT: 100
-};
-
-let currentUser = null;
-let listItemEntityTypeFullName = null;
-
-// ================================
-// デバッグ
-// ================================
+// ===== デバッグ =====
 function debug(msg) {
-  const el = document.getElementById("debugArea");
-  if (!el) return;
-  el.textContent += "\n" + msg;
+  var el = document.getElementById("debugArea");
+  if (el) el.textContent += "\n" + msg;
 }
 
-// ================================
-// 共通
-// ================================
-function getSiteBaseUrl() {
-  if (typeof _spPageContextInfo !== "undefined" && _spPageContextInfo.webAbsoluteUrl) {
-    debug("use _spPageContextInfo");
-    return _spPageContextInfo.webAbsoluteUrl;
-  }
+debug("JS start"); // ← ここ超重要
 
-  const path = window.location.pathname;
-  const idx = path.lastIndexOf("/");
-  const folderPath = path.substring(0, idx);
-  const sitePath = folderPath.substring(0, folderPath.lastIndexOf("/"));
+// ===== 設定 =====
+var LIST_TITLE = "情報保証相談室";
 
-  const base = window.location.origin + sitePath;
-  debug("calculated base: " + base);
-  return base;
+// ===== API URL =====
+function getBaseUrl() {
+  var path = location.pathname;
+  var idx = path.lastIndexOf("/");
+  var folder = path.substring(0, idx);
+  var site = folder.substring(0, folder.lastIndexOf("/"));
+  return location.origin + site;
 }
 
-function apiUrl(path) {
-  return getSiteBaseUrl() + "/_api" + path;
+function api(path) {
+  return getBaseUrl() + "/_api" + path;
 }
 
-function setMessage(text, type = "info") {
-  const el = document.getElementById("message");
-  if (!el) return;
-  el.className = `message ${type}`;
-  el.textContent = text;
-}
-
-function clearMessage() {
-  const el = document.getElementById("message");
-  if (!el) return;
-  el.className = "message";
-  el.textContent = "";
-}
-
-function escapeHtml(value) {
-  if (!value) return "";
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
-}
-
-function makeQNumber(id) {
-  return CONFIG.Q_PREFIX + String(id).padStart(CONFIG.Q_DIGITS, "0");
-}
-
-// ================================
-// REST
-// ================================
-async function spFetch(url, options = {}) {
+// ===== 共通Fetch =====
+function spFetch(url, opt) {
   debug("fetch: " + url);
 
-  const res = await fetch(url, {
+  return fetch(url, {
     credentials: "same-origin",
     headers: {
-      "Accept": "application/json;odata=verbose",
-      ...options.headers
-    },
-    ...options
+      "Accept": "application/json;odata=verbose"
+    }
+  })
+  .then(function(res){
+    debug("status: " + res.status);
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
   });
-
-  debug("status: " + res.status);
-
-  if (!res.ok) {
-    const text = await res.text();
-    debug(text);
-    throw new Error(`HTTP ${res.status}`);
-  }
-
-  return await res.json();
 }
 
-async function getCurrentUser() {
-  const data = await spFetch(apiUrl("/web/currentuser"));
-  return data.d;
-}
+// ===== 初期化 =====
+function init() {
+  debug("init start");
 
-async function getDigest() {
-  const data = await spFetch(apiUrl("/contextinfo"), { method: "POST" });
-  return data.d.GetContextWebInformation.FormDigestValue;
-}
-
-async function getEntityType() {
-  const data = await spFetch(
-    apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')?$select=ListItemEntityTypeFullName`)
-  );
-  return data.d.ListItemEntityTypeFullName;
-}
-
-// ================================
-// 登録
-// ================================
-function buildPayload() {
-  const n = CONFIG.INTERNAL_NAMES;
-
-  return {
-    __metadata: { type: listItemEntityTypeFullName },
-    [n.title]: "TEMP",
-    [n.category]: document.getElementById("category").value,
-    [n.questionBody]: document.getElementById("questionBody").value,
-    [n.phoneNumber]: document.getElementById("phoneNumber").value,
-    [n.questioner + "Id"]: currentUser.Id,
-    [n.questionDate]: new Date().toISOString(),
-    [n.status]: CONFIG.STATUS_DEFAULT
-  };
-}
-
-async function createItem() {
-  const digest = await getDigest();
-
-  const data = await spFetch(
-    apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')/items`),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json;odata=verbose",
-        "X-RequestDigest": digest
-      },
-      body: JSON.stringify(buildPayload())
-    }
-  );
-
-  return data.d;
-}
-
-async function updateTitle(id) {
-  const digest = await getDigest();
-  const n = CONFIG.INTERNAL_NAMES;
-
-  await spFetch(
-    apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')/items(${id})`),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json;odata=verbose",
-        "X-RequestDigest": digest,
-        "IF-MATCH": "*",
-        "X-HTTP-Method": "MERGE"
-      },
-      body: JSON.stringify({
-        __metadata: { type: listItemEntityTypeFullName },
-        [n.title]: makeQNumber(id)
-      })
-    }
-  );
-}
-
-async function submitQuestion() {
-  try {
-    setMessage("登録中...");
-    const item = await createItem();
-    await updateTitle(item.Id);
-    setMessage("登録完了", "success");
-    loadQuestions();
-  } catch (e) {
-    debug(e.message);
-    setMessage("失敗：" + e.message, "error");
-  }
-}
-
-// ================================
-// 一覧（全件）
-// ================================
-async function loadQuestions() {
-  const area = document.getElementById("listArea");
-  const n = CONFIG.INTERNAL_NAMES;
-
-  try {
-    const data = await spFetch(
-      apiUrl(`/web/lists/getbytitle('${CONFIG.LIST_TITLE}')/items?$top=100`)
-    );
-
-    const items = data.d.results;
-
-    debug("items: " + items.length);
-
-    let html = "<table><tr><th>No</th><th>内容</th><th>回答</th></tr>";
-
-    items.forEach(i => {
-      html += `
-        <tr>
-          <td>${i[n.title]}</td>
-          <td>${escapeHtml(i[n.questionBody])}</td>
-          <td>${escapeHtml(i[n.answerBody] || "未回答")}</td>
-        </tr>
-      `;
-    });
-
-    html += "</table>";
-    area.innerHTML = html;
-
-  } catch (e) {
-    debug(e.message);
-    area.innerHTML = "読込失敗";
-  }
-}
-
-// ================================
-// 初期化
-// ================================
-async function init() {
-  try {
-    debug("init");
-
-    currentUser = await getCurrentUser();
+  spFetch(api("/web/currentuser"))
+  .then(function(data){
     debug("user ok");
 
-    listItemEntityTypeFullName = await getEntityType();
+    document.getElementById("currentUserName").textContent =
+      data.d.Title;
+
+    return spFetch(api("/web/lists/getbytitle('" + LIST_TITLE + "')"));
+  })
+  .then(function(){
     debug("list ok");
-
-    document.getElementById("currentUserName").textContent = currentUser.Title;
-
-    await loadQuestions();
-
-  } catch (e) {
+    return loadList();
+  })
+  .catch(function(e){
     debug("init error: " + e.message);
-    setMessage(e.message, "error");
-  }
+  });
 }
 
-// ================================
-// イベント
-// ================================
-window.addEventListener("load", () => {
+// ===== 一覧 =====
+function loadList() {
+  debug("load list");
+
+  return spFetch(api("/web/lists/getbytitle('" + LIST_TITLE + "')/items"))
+  .then(function(data){
+
+    var items = data.d.results;
+    debug("items: " + items.length);
+
+    var html = "<table border='1'><tr><th>No</th><th>質問</th><th>回答</th></tr>";
+
+    for(var i=0;i<items.length;i++){
+      html += "<tr>"
+        + "<td>" + (items[i].Title || "") + "</td>"
+        + "<td>" + (items[i].質問内容 || "") + "</td>"
+        + "<td>" + (items[i].回答内容 || "未回答") + "</td>"
+        + "</tr>";
+    }
+
+    html += "</table>";
+
+    document.getElementById("listArea").innerHTML = html;
+  });
+}
+
+// ===== 登録 =====
+function submitQuestion() {
+  alert("ここはあとでやる（まず表示確認）");
+}
+
+// ===== イベント =====
+window.onload = function(){
   debug("window load");
 
   document.getElementById("submitBtn").onclick = submitQuestion;
-  document.getElementById("reloadBtn").onclick = loadQuestions;
+  document.getElementById("reloadBtn").onclick = loadList;
 
   init();
-});
+};
